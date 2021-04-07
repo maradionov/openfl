@@ -40,6 +40,8 @@ tasks:
   defaults: plan/defaults/tasks_tensorflow.yaml
   aggregated_model_validation:
     function: validate
+    aggregation_type:
+    - weighted_average
     kwargs:
       apply: global
       batch_size: 32
@@ -47,6 +49,8 @@ tasks:
       - sparse_categorical_accuracy
   locally_tuned_model_validation:
     function: validate
+    aggregation_type:
+    - weighted_average
     kwargs:
       apply: local
       batch_size: 32
@@ -55,6 +59,8 @@ tasks:
   settings: {}
   train:
     function: train
+    aggregation_type:
+    - weighted_average
     kwargs:
       batch_size: 32
       epochs: 1
