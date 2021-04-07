@@ -14,8 +14,6 @@ collaborator :
   defaults : plan/defaults/collaborator.yaml
   template : openfl.component.Collaborator
   settings :
-    epochs_per_round : 1.0
-    polling_interval : 4
     delta_updates    : false
     opt_treatment    : RESET
 
@@ -44,6 +42,8 @@ tasks :
   defaults : plan/defaults/tasks_torch.yaml
   aggregated_model_validation:
     function  : validate
+    aggregation_type:
+    - weighted_average
     kwargs    :
       apply   : global
       metrics :
@@ -51,6 +51,8 @@ tasks :
   
   locally_tuned_model_validation:
     function  : validate
+    aggregation_type:
+    - weighted_average
     kwargs    :
       apply   : local
       metrics :

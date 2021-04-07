@@ -1,5 +1,7 @@
 aggregated_model_validation:
   function : validate
+  aggregation_type:
+  - weighted_average
   kwargs   :
     batch_size : 32
     apply      : global
@@ -8,6 +10,8 @@ aggregated_model_validation:
 
 locally_tuned_model_validation:
   function : validate
+  aggregation_type:
+  - weighted_average
   kwargs   :
     batch_size : 32
     apply      : local
@@ -16,6 +20,8 @@ locally_tuned_model_validation:
 
 train:
   function : train
+  aggregation_type:
+  - weighted_average
   kwargs   :
     batch_size : 32
     epochs     : 1

@@ -1,5 +1,7 @@
 aggregated_model_validation:
   function : validate
+  aggregation_type:
+  - weighted_average
   kwargs   :
     apply   : global
     metrics :
@@ -7,6 +9,8 @@ aggregated_model_validation:
   
 locally_tuned_model_validation:
   function  : validate
+  aggregation_type:
+  - weighted_average
   kwargs    :
     apply: local
     metrics :
@@ -14,6 +18,8 @@ locally_tuned_model_validation:
   
 train:
   function : train_batches
+  aggregation_type:
+  - weighted_average
   kwargs   :
     metrics     :
     - loss
