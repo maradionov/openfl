@@ -10,17 +10,39 @@ import torch.optim as optim
 
 from openfl.federated import PyTorchTaskRunner
 from openfl.utilities import TensorKey
-from .pt_unet_parts import soft_dice_coef
-from .pt_unet_parts import soft_dice_loss
-from .pt_unet_parts import double_conv
-from .pt_unet_parts import up
-from .pt_unet_parts import down
+from openfl.federated import PyTorchDataLoader
 
+from monai.networks.nets import UNet
+from monai.losses import DiceLoss
+from monai.metrics import DiceMetric
+from monai.transforms import (
+    Activations,
+    AsChannelFirstd,
+    AsDiscrete,
+    CenterSpatialCropd,
+    Compose,
+    LoadImaged,
+    MapTransform,
+    NormalizeIntensityd,
+    Orientationd,
+    RandFlipd,
+    RandScaleIntensityd,
+    RandShiftIntensityd,
+    RandSpatialCropd,
+    Spacingd,
+    ToTensord,
+)
 
-class PyTorchFederatedUnet(PyTorchTaskRunner):
+class DiceLossHeir(DiceLoss):
+    __name__ = 'DiceLoss'
+
+    def forward(self, output, target):
+        return super().forward(input=output, target=target)
+
+class PyTorchFederated3dUnet(PyTorchTaskRunner, UNet):
     """Simple Unet for segmentation."""
 
-    def __init__(self, device, **kwargs):
+    def __init__(self, device='cuda', **kwargs):
         """Initialize.
 
         Args:
@@ -28,10 +50,10 @@ class PyTorchFederatedUnet(PyTorchTaskRunner):
             **kwargs: Additional arguments to pass to the function
 
         """
-        super().__init__(device=device, **kwargs)
+        super().__init__(**kwargs)
         self.init_network(device=self.device, **kwargs)
         self._init_optimizer()
-        self.loss_fn = soft_dice_loss
+        self.loss_fn =DiceLossHeir(to_onehot_y=False, sigmoid=True, squared_pred=True)
         self.initialize_tensorkeys_for_functions()
 
     def _init_optimizer(self):
@@ -54,20 +76,19 @@ class PyTorchFederatedUnet(PyTorchTaskRunner):
             **kwargs: Additional arguments to pass to the function
 
         """
+        UNet.__init__(self,
+            dimensions=3,
+            in_channels=4,
+            out_channels=3,
+            channels=(16, 32, 64, 128, 256),
+            strides=(2, 2, 2, 2),
+            num_res_units=2,)
+
         self.n_channels = n_channels
         self.n_classes = n_classes
-        self.inc = double_conv(self.n_channels, 64)
-        self.down1 = down(64, 128)
-        self.down2 = down(128, 256)
-        self.down3 = down(256, 512)
-        self.down4 = down(512, 1024)
-        self.up1 = up(1024, 512)
-        self.up2 = up(512, 256)
-        self.up3 = up(256, 128)
-        self.up4 = up(128, 64)
-        self.outc = nn.Conv2d(64, self.n_classes, 1)
         if print_model:
             print(self)
+        print(device)
         self.to(device)
 
     def forward(self, x):
@@ -76,18 +97,7 @@ class PyTorchFederatedUnet(PyTorchTaskRunner):
         Args:
             x: Data input to the model for the forward pass
         """
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
-        x = self.outc(x)
-        x = torch.sigmoid(x)
-        return x
+        return UNet.forward(self, x)
 
     def validate(self, col_name, round_num, input_tensor_dict, use_tqdm=True, **kwargs):
         """Run validation of the model on the local data.
@@ -107,22 +117,27 @@ class PyTorchFederatedUnet(PyTorchTaskRunner):
         self.to(self.device)
         val_score = 0
         total_samples = 0
-
+        dice_metric = DiceMetric(include_background=True, reduction="mean")
+        post_trans = Compose(
+            [Activations(sigmoid=True), AsDiscrete(threshold_values=True)]
+        )
         loader = self.data_loader.get_valid_loader()
         if use_tqdm:
             loader = tqdm.tqdm(loader, desc="validate")
 
         with torch.no_grad():
             for data, target in loader:
-                samples = target.shape[0]
-                total_samples += samples
                 data, target = torch.tensor(data).to(self.device), torch.tensor(
                     target).to(self.device)
                 output = self(data)
+                output = post_trans(output)
                 # get the index of the max log-probability
-                val = soft_dice_coef(output, target)
-                val_score += val.sum().cpu().numpy()
+                value, not_nans = dice_metric(y_pred=output, y=target)
 
+                # compute overall mean dice
+                not_nans = not_nans.item()
+                total_samples += not_nans
+                val_score += value.item() * not_nans
         origin = col_name
         suffix = 'validate'
         if kwargs['apply'] == 'local':

@@ -16,7 +16,7 @@ from openfl.utilities import TensorKey, split_tensor_dict_for_holdouts, Metric
 from .runner import TaskRunner
 
 
-class PyTorchTaskRunner(nn.Module, TaskRunner):
+class PyTorchTaskRunner(TaskRunner):
     """PyTorch Model class for Federated Learning."""
 
     def __init__(
@@ -32,7 +32,7 @@ class PyTorchTaskRunner(nn.Module, TaskRunner):
             device (string): Compute device (default="cpu")
             **kwargs: Additional parameters to pass to the functions
         """
-        super().__init__()
+#        super().__init__()
         TaskRunner.__init__(self, **kwargs)
 
         self.device = device
