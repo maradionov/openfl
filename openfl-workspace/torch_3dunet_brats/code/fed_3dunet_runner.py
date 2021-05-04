@@ -5,44 +5,23 @@
 import numpy as np
 import tqdm
 import torch
-import torch.nn as nn
 import torch.optim as optim
 
 from openfl.federated import PyTorchTaskRunner
 from openfl.utilities import TensorKey
-from openfl.federated import PyTorchDataLoader
 
-from monai.networks.nets import UNet
-from monai.losses import DiceLoss
-from monai.metrics import DiceMetric
-from monai.transforms import (
-    Activations,
-    AsChannelFirstd,
-    AsDiscrete,
-    CenterSpatialCropd,
-    Compose,
-    LoadImaged,
-    MapTransform,
-    NormalizeIntensityd,
-    Orientationd,
-    RandFlipd,
-    RandScaleIntensityd,
-    RandShiftIntensityd,
-    RandSpatialCropd,
-    Spacingd,
-    ToTensord,
-)
+from .pt_3dunet_parts import soft_dice_coef
+from .pt_3dunet_parts import soft_dice_loss
+from .pt_3dunet_parts import DoubleConv
+from .pt_3dunet_parts import Up
+from .pt_3dunet_parts import Down
+from .pt_3dunet_parts import Out
 
-class DiceLossHeir(DiceLoss):
-    __name__ = 'DiceLoss'
 
-    def forward(self, output, target):
-        return super().forward(input=output, target=target)
-
-class PyTorchFederated3dUnet(PyTorchTaskRunner, UNet):
+class PyTorchFederated3dUnet(PyTorchTaskRunner):
     """Simple Unet for segmentation."""
 
-    def __init__(self, device='cuda', **kwargs):
+    def __init__(self, device='cpu', **kwargs):
         """Initialize.
 
         Args:
@@ -50,10 +29,10 @@ class PyTorchFederated3dUnet(PyTorchTaskRunner, UNet):
             **kwargs: Additional arguments to pass to the function
 
         """
-        super().__init__(**kwargs)
+        super().__init__(device, **kwargs)
         self.init_network(device=self.device, **kwargs)
         self._init_optimizer()
-        self.loss_fn =DiceLossHeir(to_onehot_y=False, sigmoid=True, squared_pred=True)
+        self.loss_fn = soft_dice_loss
         self.initialize_tensorkeys_for_functions()
 
     def _init_optimizer(self):
@@ -76,82 +55,82 @@ class PyTorchFederated3dUnet(PyTorchTaskRunner, UNet):
             **kwargs: Additional arguments to pass to the function
 
         """
-        UNet.__init__(self,
-            dimensions=3,
-            in_channels=4,
-            out_channels=3,
-            channels=(16, 32, 64, 128, 256),
-            strides=(2, 2, 2, 2),
-            num_res_units=2,)
-
-        self.n_channels = n_channels
+        self.in_channels = n_channels
         self.n_classes = n_classes
+        depth_mult = 10
+
+        self.conv = DoubleConv(self.in_channels, depth_mult)
+        self.enc1 = Down(depth_mult, 2 * depth_mult)
+        self.enc2 = Down(2 * depth_mult, 4 * depth_mult)
+        self.enc3 = Down(4 * depth_mult, 8 * depth_mult)
+        self.enc4 = Down(8 * depth_mult, 8 * depth_mult)
+
+        self.dec1 = Up(16 * depth_mult, 4 * depth_mult)
+        self.dec2 = Up(8 * depth_mult, 2 * depth_mult)
+        self.dec3 = Up(4 * depth_mult, depth_mult)
+        self.dec4 = Up(2 * depth_mult, depth_mult)
+        self.out = Out(depth_mult, self.n_classes)
         if print_model:
             print(self)
-        print(device)
         self.to(device)
 
     def forward(self, x):
-        """Forward pass of the model.
+        x1 = self.conv(x)
+        x2 = self.enc1(x1)
+        x3 = self.enc2(x2)
+        x4 = self.enc3(x3)
+        x5 = self.enc4(x4)
 
-        Args:
-            x: Data input to the model for the forward pass
-        """
-        return UNet.forward(self, x)
+        mask = self.dec1(x5, x4)
+        mask = self.dec2(mask, x3)
+        mask = self.dec3(mask, x2)
+        mask = self.dec4(mask, x1)
+        mask = self.out(mask)
+        mask = torch.sigmoid(mask)
 
-    def validate(self, col_name, round_num, input_tensor_dict, use_tqdm=True, **kwargs):
-        """Run validation of the model on the local data.
+        return mask
 
-        Args:
-            col_name:            Name of the collaborator
-            round_num:           What round is it
-            input_tensor_dict:   Required input tensors (for model)
-            use_tqdm:     Use tqdm to print a progress bar (Default=True)
-
-        Returns:
-            global_output_dict:  Tensors to send back to the aggregator
-            local_output_dict:   Tensors to maintain in the local TensorDB
-        """
+    def validate(
+        self, col_name, round_num, input_tensor_dict, use_tqdm=True, **kwargs
+    ):
+        """ Validate. Redifine function from PyTorchTaskRunner, to use our validation"""
         self.rebuild_model(round_num, input_tensor_dict, validation=True)
-        self.eval()
-        self.to(self.device)
-        val_score = 0
-        total_samples = 0
-        dice_metric = DiceMetric(include_background=True, reduction="mean")
-        post_trans = Compose(
-            [Activations(sigmoid=True), AsDiscrete(threshold_values=True)]
-        )
         loader = self.data_loader.get_valid_loader()
         if use_tqdm:
             loader = tqdm.tqdm(loader, desc="validate")
+    # -------------Usual validation code---------------------------------------------------------------------------
+        self.eval()
+        self.to(self.device)
+        metric = 0.0
+        sample_num = 0
 
+        if use_tqdm:
+            loader = tqdm.tqdm(loader, desc="validate")
         with torch.no_grad():
-            for data, target in loader:
-                data, target = torch.tensor(data).to(self.device), torch.tensor(
-                    target).to(self.device)
-                output = self(data)
-                output = post_trans(output)
-                # get the index of the max log-probability
-                value, not_nans = dice_metric(y_pred=output, y=target)
+            for val_inputs, val_labels in loader:
+                val_inputs = val_inputs.to(self.device)
+                val_labels = val_labels.to(self.device)
+                val_outputs = self(val_inputs)
+                val_outputs = (val_outputs >= 0.5).float()
+                value = soft_dice_coef(val_outputs, val_labels)
+                sample_num += val_labels.shape[0]
+                metric += value.cpu().numpy()
 
-                # compute overall mean dice
-                not_nans = not_nans.item()
-                total_samples += not_nans
-                val_score += value.item() * not_nans
+            metric = metric / sample_num
+    # --------------------------------------------------------------------------
+
         origin = col_name
-        suffix = 'validate'
-        if kwargs['apply'] == 'local':
-            suffix += '_local'
+        suffix = "validate"
+        if kwargs["apply"] == "local":
+            suffix += "_local"
         else:
-            suffix += '_agg'
-        tags = ('metric', suffix)
-        # TODO figure out a better way to pass in metric for this pytorch
-        #  validate function
+            suffix += "_agg"
+        tags = ("metric", suffix)
         output_tensor_dict = {
-            TensorKey('dice_coef', origin, round_num, True, tags):
-                np.array(val_score / total_samples)
+            TensorKey("dice_coef", origin, round_num, True, tags): np.array(
+                metric
+            )
         }
-
         return output_tensor_dict, {}
 
     def reset_opt_vars(self):

@@ -3,160 +3,75 @@
 
 """You may copy this file as the starting point of your own model."""
 
-import os
-from tqdm import tqdm
+import random
 import urllib.request
 from hashlib import sha384
-from os import path
-import shutil
-import tempfile
-import sys
-import json
 import tarfile
-
-import matplotlib.pyplot as plt
 import numpy as np
-from monai.apps import DecathlonDataset
-from monai.config import print_config
-from monai.data import DataLoader
-from monai.data import CacheDataset
-from monai.data import Dataset 
-from monai.data import (load_decathlon_datalist, load_decathlon_properties)
-from monai.transforms import Randomizable
-from monai.losses import DiceLoss
-from monai.metrics import DiceMetric
-from monai.networks.nets import UNet
-from monai.transforms import (
-    Activations,
-    AsChannelFirstd,
-    AsDiscrete,
-    CenterSpatialCropd,
-    Compose,
-    LoadImaged,
-    MapTransform,
-    NormalizeIntensityd,
-    Orientationd,
-    RandFlipd,
-    RandScaleIntensityd,
-    RandShiftIntensityd,
-    RandSpatialCropd,
-    Spacingd,
-    ToTensord,
-)
-from monai.utils import set_determinism
 
-import torch
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Union, Dict
-from openfl.federated import FederatedModel, FederatedDataSet
-from openfl.utilities import TensorKey
+from torch.utils.data import DataLoader
 from openfl.federated import PyTorchDataLoader
 
-class ConvertToMultiChannelBasedOnBratsClassesd(MapTransform):
-    """
-    Convert labels to multi channels based on brats classes:
-    label 1 is the peritumoral edema
-    label 2 is the GD-enhancing tumor
-    label 3 is the necrotic and non-enhancing tumor core
-    The possible classes are TC (Tumor core), WT (Whole tumor)
-    and ET (Enhancing tumor).
+from tqdm import tqdm
+import nibabel as nib
+from skimage.transform import resize
 
-    """
 
-    def __call__(self, data):
-        d = dict(data)
-        for key in self.keys:
-            result = []
-            # merge label 2 and label 3 to construct TC
-            result.append(np.logical_or(d[key] == 2, d[key] == 3))
-            # merge labels 1, 2 and 3 to construct WT
-            result.append(
-                np.logical_or(
-                    np.logical_or(d[key] == 2, d[key] == 3), d[key] == 1
-                )
-            )
-            # label 2 is ET
-            result.append(d[key] == 2)
-            d[key] = np.stack(result, axis=0).astype(np.float32)
-        return d
-
-class BraTSDataset(CacheDataset):
+class BraTSDataset():
     """
     This dataset contains brain tumor 3d images for one collaborator train or val.
     Args:
-        collaborator_count: total number of collaborators
-        collaborator_num: number of current collaborator
-        is_validation: validation option
-        transform: transform function
+        data_list: list of image paths
     """
 
-    def __init__(self, is_validation, shard_num, collaborator_count, **kwargs):
-        train_transform = Compose(
-        [
-            # load 4 Nifti images and stack them together
-            LoadImaged(keys=["image", "label"]),
-            AsChannelFirstd(keys="image"),
-            ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
-            Spacingd(
-                keys=["image", "label"],
-                pixdim=(1.5, 1.5, 2.0),
-                mode=("bilinear", "nearest"),
-            ),
-            Orientationd(keys=["image", "label"], axcodes="RAS"),
-            RandSpatialCropd(
-                keys=["image", "label"], roi_size=[128, 128, 64], random_size=False
-            ),
-            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
-            NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
-            RandScaleIntensityd(keys="image", factors=0.1, prob=0.5),
-            RandShiftIntensityd(keys="image", offsets=0.1, prob=0.5),
-            ToTensord(keys=["image", "label"]),
-        ]
-        )
-        val_transform = Compose(
-        [
-            LoadImaged(keys=["image", "label"]),
-            AsChannelFirstd(keys="image"),
-            ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
-            Spacingd(
-                keys=["image", "label"],
-                pixdim=(1.5, 1.5, 2.0),
-                mode=("bilinear", "nearest"),
-            ),
-            Orientationd(keys=["image", "label"], axcodes="RAS"),
-            CenterSpatialCropd(keys=["image", "label"], roi_size=[128, 128, 64]),
-            NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
-            ToTensord(keys=["image", "label"]),
-        ]
-        )
-        self.is_validation = is_validation
-        dataset_dir = './data/Task01_BrainTumour/' 
+    def __init__(self, data_list):
+        self.data_list = data_list
 
-        self.indices: np.ndarray = np.array([])
-        if is_validation:
-            transform = val_transform
-        else:
-            transform = train_transform 
-        data = self._generate_data_list(dataset_dir)
-        data= data[shard_num :: collaborator_count]
-        self.is_validation = is_validation
-        assert(len(data) > 8)
-        validation_size = len(data) // 8
-        if is_validation:
-            data= data[-validation_size:]
-        else:
-            data= data[: -validation_size]
-        data = data[:3]
-        super().__init__(data, transform, cache_num=1, num_workers=4)
+    def __len__(self):
+        return len(self.data_list)
 
-
-    def _generate_data_list(self, dataset_dir: str) -> List[Dict]:
-        datalist = load_decathlon_datalist(os.path.join(dataset_dir, "dataset.json"), True, "training")
-        return datalist
-    
     def __getitem__(self, index):
-        tmp = super().__getitem__(index)
-        return (tmp['image'], tmp['label'])
+        images = []
+        for i in range(1, 5):
+            img = nib.load(self.data_list[index]['image{}'.format(i)])
+            img = np.asanyarray(img.dataobj)
+            img = self.resize(img, (160, 160, 128))
+            img = self.normalize(img)
+            images.append(img)
+        img = np.stack(images)
+        img = img.astype(np.float32)
 
+        mask = nib.load(self.data_list[index]['label'])
+        mask = np.asanyarray(mask.dataobj)
+        mask = self.resize(mask, (160, 160, 128)).astype(np.uint8)
+        mask = self.classify(mask)
+        return (img, mask)
+
+    def normalize(self, data):
+        data_min = np.min(data)
+        return (data - data_min) / (np.max(data) - data_min)
+
+    def resize(self, data, sizes):
+        data = resize(data, sizes, mode='edge',
+                      anti_aliasing=False,
+                      anti_aliasing_sigma=None,
+                      preserve_range=True,
+                      order=0)
+        return data
+
+    def classify(self, inputs):
+        result = []
+        # merge label 2 and label 3 to construct TC
+        result.append(np.logical_or(inputs == 2, inputs == 3))
+        # merge labels 1, 2 and 3 to construct WT
+        result.append(
+            np.logical_or(
+                np.logical_or(inputs == 2, inputs == 3), inputs == 1
+            )
+        )
+        # label 2 is ET
+        result.append(inputs == 2)
+        return np.stack(result, axis=0).astype(np.float32)
 
 
 def my_hook(t):
@@ -181,16 +96,9 @@ def load_brats_dataset():
     #           desc='Downloading brats dataset: ') as t:
     #     urllib.request.urlretrieve(data_url, filename=filepath,
     #                                reporthook=my_hook(t), data=None)
-    import shutil
-
-    original = r'/home/maksim/tmp/brats.tar'
-    target = r'./brats.tar'
-    print('before copy')
-    # shutil.copyfile(original, target)
     # assert sha384(open(filepath, 'rb').read(
     #     path.getsize(filepath))).hexdigest() == TAR_SHA384
 
-    print('after copy')
     # with tarfile.open(filepath, "r:") as tar_ref:
     #     for member in tqdm(iterable=tar_ref.infolist(), desc='Untarring dataset'):
     #         tar_ref.extract(member, "./data")
@@ -199,40 +107,69 @@ def load_brats_dataset():
 class PyTorchBraTSDataLoader(PyTorchDataLoader):
     """PyTorch data loader for BraTS dataset."""
 
-    def __init__(self, data_path, batch_size, **kwargs):
-        """Instantiate the data object.
-
+    def __init__(self, data_path, batch_size, collaborator_count, **kwargs):
+        """Instantiate the federated data object
         Args:
-            data_path: The file path to the data
-            batch_size: The batch size of the data loader
-            **kwargs: Additional arguments, passed to super
-             init and load_mnist_shard
+            collaborator_count: total number of collaborators
+            collaborator_num: number of current collaborator
+            batch_size:  the batch size of the data loader
+            data_list: general list of all image paths, in current implementation 
+                it should be created once so that each colaborator gets its own data
+            **kwargs: additional arguments, passed to super init
         """
         super().__init__(batch_size, **kwargs)
 
-        load_brats_dataset()
-        self.valid_dataset = BraTSDataset(True, shard_num=int(data_path), **kwargs)
-        self.train_dataset = BraTSDataset(False, shard_num=int(data_path), **kwargs)
+        self.batch_size = batch_size
+        self.train_list = self.generate_train_list(collaborator_count, int(data_path))
+        self.val_list = self.generate_val_list(collaborator_count, int(data_path))
+        self.training_set = BraTSDataset(self.train_list)
+        self.valid_set = BraTSDataset(self.val_list)
+
         self.train_loader = self.get_train_loader()
         self.val_loader = self.get_valid_loader()
-        self.batch_size = batch_size
+
+    def generate_name_list(self, collaborator_count, collaborator_num, is_validation):
+        data_dir = './data/MICCAI_BraTS2020_TrainingData/'
+        self.data_list = [
+            {
+                'image1': data_dir + 'BraTS20_Training_' + str(i)[1:] + '/BraTS20_Training_' + str(i)[1:] + '_flair.nii.gz',
+                'image2': data_dir + 'BraTS20_Training_' + str(i)[1:] + '/BraTS20_Training_' + str(i)[1:] + '_t1ce.nii.gz',
+                'image3': data_dir + 'BraTS20_Training_' + str(i)[1:] + '/BraTS20_Training_' + str(i)[1:] + '_t1.nii.gz',
+                'image4': data_dir + 'BraTS20_Training_' + str(i)[1:] + '/BraTS20_Training_' + str(i)[1:] + '_t2.nii.gz',
+                'label': data_dir + 'BraTS20_Training_' + str(i)[1:] + '/BraTS20_Training_' + str(i)[1:] + '_seg.nii.gz'
+            } for i in range(1001, 1370)]
+        random.seed(4)
+        random.shuffle(self.data_list)
+
+        # split all data for current collaborator
+        data = self.data_list[collaborator_num:: collaborator_count]
+        assert(len(data) > 7)
+        validation_size = len(data) // 7
+        if is_validation:
+            data = data[-validation_size:]
+        else:
+            data = data[: -validation_size]
+        return data
+
+    def generate_train_list(self, collaborator_count, collaborator_num):
+        return self.generate_name_list(collaborator_count, collaborator_num, False)
+
+    def generate_val_list(self, collaborator_count, collaborator_num):
+        return self.generate_name_list(collaborator_count, collaborator_num, True)
 
     def get_valid_loader(self, num_batches=None):
-        """Return validation dataloader."""
-        return DataLoader(self.valid_dataset, batch_size=self.batch_size)
+        return DataLoader(self.valid_set, num_workers=2, batch_size=self.batch_size)
 
     def get_train_loader(self, num_batches=None):
-        """Return train dataloader."""
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
+        return DataLoader(
+            self.training_set, num_workers=2, batch_size=self.batch_size, shuffle=True
+        )
 
     def get_train_data_size(self):
-        """Return size of train dataset."""
-        return len(self.train_dataset)
+        return len(self.training_set)
 
     def get_valid_data_size(self):
-        """Return size of validation dataset."""
-        return len(self.valid_dataset)
+        return len(self.valid_set)
 
     def get_feature_shape(self):
-        """Return data shape."""
-        return self.valid_dataset[0][0].shape
+        return self.valid_set[0][0].shape
