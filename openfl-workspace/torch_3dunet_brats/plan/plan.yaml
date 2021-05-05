@@ -28,6 +28,7 @@ data_loader :
 task_runner :
   defaults : plan/defaults/task_runner.yaml
   template : code.fed_3dunet_runner.PyTorchFederated3dUnet
+  device: cpu
   settings :
     n_channels : 4
     n_classes  : 3
@@ -45,6 +46,7 @@ tasks :
     aggregation_type:
     - weighted_average
     kwargs    :
+      use_tqdm: True
       apply   : global
       metrics :
       - dice_coef
@@ -54,6 +56,16 @@ tasks :
     aggregation_type:
     - weighted_average
     kwargs    :
+      use_tqdm: True
       apply   : local
       metrics :
       - dice_coef
+
+  train:
+    function : train_batches
+    aggregation_type:
+    - weighted_average
+    kwargs   :
+      use_tqdm: True
+      metrics     :
+      - loss

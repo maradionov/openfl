@@ -91,7 +91,7 @@ class PyTorchFederated3dUnet(PyTorchTaskRunner):
         return mask
 
     def validate(
-        self, col_name, round_num, input_tensor_dict, use_tqdm=True, **kwargs
+        self, col_name, round_num, input_tensor_dict, use_tqdm=False, **kwargs
     ):
         """ Validate. Redifine function from PyTorchTaskRunner, to use our validation"""
         self.rebuild_model(round_num, input_tensor_dict, validation=True)
@@ -104,8 +104,6 @@ class PyTorchFederated3dUnet(PyTorchTaskRunner):
         metric = 0.0
         sample_num = 0
 
-        if use_tqdm:
-            loader = tqdm.tqdm(loader, desc="validate")
         with torch.no_grad():
             for val_inputs, val_labels in loader:
                 val_inputs = val_inputs.to(self.device)
