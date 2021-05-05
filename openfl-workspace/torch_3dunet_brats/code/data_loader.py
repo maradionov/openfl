@@ -158,11 +158,11 @@ class PyTorchBraTSDataLoader(PyTorchDataLoader):
         return self.generate_name_list(collaborator_count, collaborator_num, True)
 
     def get_valid_loader(self, num_batches=None):
-        return DataLoader(self.valid_set, num_workers=2, batch_size=self.batch_size)
+        return DataLoader(self.valid_set, num_workers=4, batch_size=self.batch_size)
 
     def get_train_loader(self, num_batches=None):
         return DataLoader(
-            self.training_set, num_workers=2, batch_size=self.batch_size, shuffle=True
+            self.training_set, num_workers=4, batch_size=self.batch_size, shuffle=True
         )
 
     def get_train_data_size(self):
