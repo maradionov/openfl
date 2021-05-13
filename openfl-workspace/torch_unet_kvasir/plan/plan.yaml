@@ -15,6 +15,7 @@ collaborator :
   template : openfl.component.Collaborator
   settings :
     epochs_per_round : 1.0
+    polling_interval : 4
     delta_updates    : false
     opt_treatment    : RESET
 
