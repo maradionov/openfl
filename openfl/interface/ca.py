@@ -87,7 +87,6 @@ def init(password, ca_url):
         if 'step-ca' in dir_:
             step_ca = f'./step/{dir_}/bin/step-ca'
     assert(step and step_ca and os.path.exists(step) and os.path.exists(step_ca))
-    print(step)
 
     echo('Create CA Config')
     os.environ["STEPPATH"] = step_config_dir
@@ -115,7 +114,6 @@ def get_token(name, ca_url):
                     (aggregator fqdn or collaborator name)
         ca_url: full url of CA server
     """
-    print(step)
     import subprocess
 
     os.environ["STEPPATH"] = step_config_dir
@@ -131,7 +129,7 @@ def get_token(name, ca_url):
     if token[-1:] == b'\n':
         token = token[:-1]
     length = len(token)
-    assert(length < 10002)
+    assert(length < 10000)
     length = str(10000 + length)[-4:]
     with open(step_config_dir + '/certs/root_ca.crt', mode='rb') as file:
         root_ca = file.read()
