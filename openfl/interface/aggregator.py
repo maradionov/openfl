@@ -3,7 +3,6 @@
 """Aggregator module."""
 
 from logging import getLogger
-from socket import getfqdn
 
 from click import echo
 from click import group
@@ -11,6 +10,8 @@ from click import option
 from click import pass_context
 from click import Path as ClickPath
 from click import style
+
+from openfl.utilities.utils import getfqdn_env
 
 logger = getLogger(__name__)
 
@@ -50,8 +51,8 @@ def start_(context, plan, authorized_cols, secure):
 @aggregator.command(name='generate-cert-request')
 @option('--fqdn', required=False,
         help=f'The fully qualified domain name of'
-             f' aggregator node [{getfqdn()}]',
-        default=getfqdn())
+             f' aggregator node [{getfqdn_env()}]',
+        default=getfqdn_env())
 def _generate_cert_request(fqdn):
     generate_cert_request(fqdn)
 
@@ -59,11 +60,12 @@ def _generate_cert_request(fqdn):
 def generate_cert_request(fqdn):
     """Create aggregator certificate key pair."""
     from openfl.cryptography.participant import generate_csr
-    from openfl.cryptography.io import write_crt, write_key
+    from openfl.cryptography.io import write_crt
+    from openfl.cryptography.io import write_key
     from openfl.interface.cli_helper import PKI_DIR
 
     if fqdn is None:
-        fqdn = getfqdn()
+        fqdn = getfqdn_env()
 
     common_name = f'{fqdn}'.lower()
     subject_alternative_name = f'DNS:{common_name}'
@@ -99,8 +101,8 @@ def find_certificate_name(file_name):
 
 @aggregator.command(name='certify')
 @option('-n', '--fqdn',
-        help=f'The fully qualified domain name of aggregator node [{getfqdn()}]',
-        default=getfqdn())
+        help=f'The fully qualified domain name of aggregator node [{getfqdn_env()}]',
+        default=getfqdn_env())
 @option('-s', '--silent', help='Do not prompt', is_flag=True)
 def _certify(fqdn, silent):
     certify(fqdn, silent)
@@ -113,12 +115,14 @@ def certify(fqdn, silent):
     from click import confirm
 
     from openfl.cryptography.ca import sign_certificate
-    from openfl.cryptography.io import read_key, read_crt, read_csr
+    from openfl.cryptography.io import read_crt
+    from openfl.cryptography.io import read_csr
+    from openfl.cryptography.io import read_key
     from openfl.cryptography.io import write_crt
     from openfl.interface.cli_helper import PKI_DIR
 
     if fqdn is None:
-        fqdn = getfqdn()
+        fqdn = getfqdn_env()
 
     common_name = f'{fqdn}'.lower()
     file_name = f'agg_{common_name}'
